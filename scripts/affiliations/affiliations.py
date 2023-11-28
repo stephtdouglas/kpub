@@ -4,7 +4,7 @@ to Carnegie Classifications where possible.
 Carnegie Classifications are obtained from:
 https://carnegieclassifications.acenet.edu/downloads.php
 """
-import os
+import os, sys
 
 import nltk
 import time
@@ -16,71 +16,13 @@ import numpy as np
 import astropy.io.ascii as at
 
 # For carnegie classifications, have to assume some equivalences
-cequiv = {"University of Texas":"The University of Texas at Austin",
-          "University of Texas-San Antonio":"The University of Texas at San Antonio",
-          "University of Texas at Austin 2515 Speedway":"The University of Texas at Austin",
-          "University of Virginia":"University of Virginia-Main Campus",
-          "Saint Mary's University":"Saint Mary's University of Minnesota",
-          "University of Maryland College Park":"University of Maryland-College Park",
-          "University of Maryland":"University of Maryland-College Park",
-          "University of Hawai`i":"University of Hawaii at Manoa",
-          "University of Hawaíi":"University of Hawaii at Manoa",
-          "University of Hawaii":"University of Hawaii at Manoa",
-          "University of Hawai'i":"University of Hawaii at Manoa",
-          "University of Hawaii at Mānoa":"University of Hawaii at Manoa",
-          "University of Hawaií at Manoa":"University of Hawaii at Manoa",
-          "University of Idaho Moscow":"University of Idaho",
-          "University of Illinois at Urbana-Champaign":"University of Illinois Urbana-Champaign",
-          "University of California Santa Cruz":"University of California-Santa Cruz",
-          "University of Washington Box 951580":"University of Washington-Seattle Campus",
-          "University of Washington":"University of Washington-Seattle Campus",
-          "University of Nevada":"University of Nevada-Las Vegas",
-          "Bowling Green State University":"Bowling Green State University-Main Campus",
-          "Purdue University":"Purdue University-Main Campus",
-          "University of Hawai’i":"University of Hawaii at Manoa",
-          "University of Hawai'i-Manoa":"University of Hawaii at Manoa",
-          "Washington University":"Washington University in St Louis", # Probably the biggest guess here
-          "Georgia College":"Georgia College & State University",
-          "Georgia College &amp":"Georgia College & State University",
-          "California State Polytechnic University":"California State Polytechnic University-Pomona",
-          "University of Nebraska":"University of Nebraska-Lincoln",
-          "University of Pittsburgh":"University of Pittsburgh-Pittsburgh Campus",
-          "University of Cincinnati":"University of Cincinnati-Main Campus",
-          "NASA Goddard and University of Maryland":"University of Maryland-College Park",
-          "New Mexico State University—DACC":"New Mexico State University-Dona Ana",
-          "New Mexico State University-DACC":"New Mexico State University-Dona Ana",
-          "the Pennsylvania State University":"The Pennsylvania State University",
-          "University of California":"University of California-Berkeley",
-          "Ohio State University":"Ohio State University-Main Campus",
-          "Columbia University":"Columbia University in the City of New York",
-          "Missouri State University":"Missouri State University-Springfield",
-          "Missouri StateUniversity":"Missouri State University-Springfield",
-          "University of North Carolina":"University of North Carolina at Chapel Hill",
-          "University of Michigan":"University of Michigan-Ann Arbor",
-          "New Mexico State University":"New Mexico State University-Main Campus",
-          "Louisiana State University":"Louisiana State University and Agricultural & Mechanical College",
-          "University of Minnesota":"University of Minnesota-Twin Cities",
-          "Arizona State University":"Arizona State University Campus Immersion",
-          "University of Oklahoma":"University of Oklahoma-Norman Campus",
-          "University of Colorado":"University of Colorado Boulder",
-          "University of California San Diego":"University of California-San Diego",
-          "Indiana University":"'Indiana University-Bloomington",
-          "University of Wisconsin - Madison":"University of Wisconsin-Madison",
-          "University of Wisconsin─Madison":"University of Wisconsin-Madison",
-          "University of Wisconsin—Madison":"University of Wisconsin-Madison",
-          # "State University of New Jersey":"",
-          "Embry-Riddle Aeronautical University":"Embry-Riddle Aeronautical University-Prescott",
-          "University of California Berkeley":"University of California-Berkeley",
-          "Hobart and William Smith Colleges":"Hobart William Smith Colleges",
-          "Cornell Center for Astrophysics and Planetary Science":"Cornell University"
-          # "":"",
-          # "":"",
-          # "":"",
-          # "":"",
-          # "":""
-          }
+cequiv0 = at.read("equivalencies.csv")
+# cequiv = Table(cequiv0, masked=False, copy=True)
+cequiv = cequiv0.filled(fill_value=-9999)
+# print(cequiv["MergeName"])
+# sys.exit()
 
-cequiv_names = cequiv.keys()
+cequiv_names = cequiv["Affiliation"][cequiv["MergeName"]!="-9999"]
 
 # Step 1: obtain the first author affiliations from kpub
 def get_locations(mission=None,n_show=20):
@@ -101,7 +43,10 @@ def get_locations(mission=None,n_show=20):
         # Some institutions are double-counted, many things that aren't institutions
         # like streets are included
 
+        # TODO: use the geolocation from another script to separate international institutions
+
         # Use the first three authors
+        pub_affil = []
         for aff in affiliations[:3]:
             # I want only the name of the institutions
             aff0 = aff.split(";")[0].split(",")
@@ -118,8 +63,32 @@ def get_locations(mission=None,n_show=20):
                       ("Center" in aff_suffix) or ("Instit" in aff_suffix) or
                       ("Centre" in aff_suffix) or ("Observ" in aff_suffix)):
 
-                    locations.append(aff_suffix.replace("The","").replace("\"","").strip())
+                    base_location = aff_suffix.replace("The","").replace("\"","").strip()
+
+                if base_location in cequiv_names:
+                    loc = np.where(cequiv["Affiliation"]==base_location)[0]
+                    if len(loc)>1:
+                        loc = loc[0]
+                    if cequiv["MergeName"][loc][0]!="-9999":
+                        location = cequiv["MergeName"][loc][0]
+                    else:
+                        location = base_location
+                else:
+                    location = base_location
+
+                if ";" in location:
+                    loc1, loc2 = location.split(";")
+                    pub_affil.append(loc1)
+                    pub_affil.append(loc2)
+                else:
+                    pub_affil.append(location)
+
+            pub_unique = np.unique(pub_affil)
+
+        if len(pub_unique)>0:
+            locations.append(pub_unique)
                     # break
+    locations = np.concatenate(locations)
     unique_locations = nltk.FreqDist(locations)
     print("Found {} unique locations".format(len(unique_locations)))
 
@@ -154,6 +123,15 @@ def carnegie_match(institutions):
         if inst in car["name"]:
             found = True
 
+        if (found==False) and (inst in cequiv["Affiliation"]):
+            loc = np.where(cequiv["Affiliation"]==inst)[0]
+            if len(loc)>=1:
+                if len(loc)>1:
+                    loc = loc[0]
+                fname = cequiv["MergeName"][loc][0]
+                found = True
+
+
         if found==False:
             test_names = [f"The {inst}",inst.replace(" at ","-"),
                           inst.replace("-"," at "),inst.replace("-"," "),
@@ -166,11 +144,6 @@ def carnegie_match(institutions):
                     found = True
                     fname = name
 
-        if (found==False) and (name in cequiv_names):
-            name = cequiv[inst]
-            if name in car["name"]:
-                found = True
-                fname = name
 
         # if found==False:
         #     flist = []
@@ -185,55 +158,25 @@ def carnegie_match(institutions):
         #         print(flist)
 
         loc = np.where(car["name"]==fname)[0]
+        loc2 = np.where((cequiv["Affiliation"]==fname) & (cequiv["CarnegieClass"]>-9998))[0]
+        loc3 = np.where((cequiv["MergeName"]==fname) & (cequiv["CarnegieClass"]>-9998))[0]
+        # print(inst,loc,loc2,loc3)
         if len(loc)==1:
             cclass[i] = car["basic2021"][loc]
+        elif len(loc2)>0:
+            if len(loc2)>1:
+                loc2 = loc2[0]
+            cclass[i] = cequiv["CarnegieClass"][loc2]
+        elif len(loc3)>0:
+            if len(loc3)>1:
+                loc3 = loc3[0]
+            cclass[i] = cequiv["CarnegieClass"][loc3]
         elif ("Coll" in inst) or ("Univ" in inst):
-            print("Not found:",inst)
+            # print("Not found:",inst)
+            pass
         else:
             # Assume in this case, it's a street name or department name
             continue
-
-    # Now assign values for a handful of known US-based but non-university locations
-    # -3 will be the flag here
-    to_add = ["Harvard-Smithsonian Center for Astrophysics",
-              "NASA Ames Research Center","Harvard‚îÄSmithsonian Center for Astrophysics",
-              "Spitzer Science Center (SSC)","NASA Goddard Space Flight Center",
-              "Infrared Processing and Analysis Center (IPAC)","NASA Exoplanet Science Institute",
-              "Center for Computational Astrophysics","Caltech/IPAC-NASA Exoplanet Science Institute",
-              "Cerro Tololo Inter-American Observatory","SETI Institute",
-              "Spitzer Science Center","Space Telescope Science Institute",
-              "Southwest Research Institute","Planetary Science Institute",
-              "Observatories of the Carnegie Institution for Science",
-              "Infrared processing and Analysis Center (IPAC)",
-              "American Association of Variable Star Observers (AAVSO)",
-              "Center for Astrophysics ‚à£ Harvard &amp",
-              "Gemini Observatory","Las Cumbres Observatory",
-              "NASA Astrobiology Institute's Virtual Planetary Laboratory",
-              "Harvard-Smithonian Center for Astrophysics",
-              "National Solar Observatory","Carnegie Institution for Science",
-              "Caltech/IPAC-NASA Exoplanet Science Institute Pasadena",
-              "NASA/Goddard Space Flight Center",
-              "NASA Goddard Space Flight Center",
-              "SETI Institute/NASA Ames Research Center",
-              "National Optical Astronomy Observatory",
-              "Institute for Advanced Study",
-              "UCO/Lick Observatory","NASA-Ames Research Center",
-              "Fermilab Center for Particle Astrophysics",
-              "National Center for Atmospheric Research",
-              "US Naval Observatory","Harvard Smithsonian Center for Astrophysics",
-              "Ames Research Center","Carnegie Observatories",
-              "NASA's Goddard Space Flight Center","NASA Exoplanet Science Institute/Caltech",
-              "NASA Goddard Space Flight Center (GSFC)",
-              "Las Cumbres Observatory Global Telescope",
-              "NASA Goddard Institute for Space Studies",
-              "NASA Exoplanet Science Institute/Caltech Pasadena",
-              "NASA Exoplanet Science Institute and Infrared Processing and Analysis Center",
-              "NASA Astrobiology Institute‚ÄîVirtual Planetary Laboratory Lead Team",
-              "NASA Herschel Science Center",
-              "NASA/Ames Research Center","National Radio Astronomy Observatory",
-              "Giant Magellan Telescope/Carnegie Observatories"]
-    for name in to_add:
-        cclass[institutions==name] = -3
 
     return cclass
 
@@ -293,11 +236,11 @@ def carnegie_counts(tab):
 
 if __name__=="__main__":
 
-    fname = "affiliations_kepler_k2.csv"
-    if os.path.exists(fname):
-        tab = at.read(fname)
-    else:
-        tab = make_table()
+    # fname = "affiliations_kepler_k2_new.csv"
+    # if os.path.exists(fname):
+    #     tab = at.read(fname)
+    # else:
+    tab = make_table()
 
     if tab.masked == True:
         tab = Table(tab, masked=False, fill_value=0)
